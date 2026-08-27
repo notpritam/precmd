@@ -59,6 +59,7 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
       branchNameRule(
         git.branch.allowedPrefixes ?? DEFAULT_ALLOWED_PREFIXES,
         git.branch.reservedPrefixes ?? [],
+        git.branch.slug === "kebab-case",
       ),
     );
   }
@@ -123,17 +124,19 @@ function newBranchName(inv: Invocation): string | null {
   return null;
 }
 
-function branchNameRule(allowed: string[], reserved: string[]): Rule {
-  const pattern = new RegExp(`^(${allowed.join("|")})/[a-z0-9]+(-[a-z0-9]+)*$`);
+function branchNameRule(allowed: string[], reserved: string[], strictKebab: boolean): Rule {
+  const kebab = /^[a-z0-9]+(-[a-z0-9]+)*$/;
   return {
     id: "branch-name",
-    description: "new branches must be <type>/<kebab-case-slug> with an allowed prefix",
+    description: "new branches must use an allowed <type>/ prefix (kebab slug when configured)",
     appliesTo: { command: "git" },
     evaluate(inv) {
       const name = newBranchName(inv);
       if (!name) return null;
       if (inv.uncertain) return null; // structural rule skips on ambiguous parse
-      const prefix = name.includes("/") ? name.slice(0, name.indexOf("/")) : name;
+      const slashIdx = name.indexOf("/");
+      const prefix = slashIdx >= 0 ? name.slice(0, slashIdx) : name;
+      const slug = slashIdx >= 0 ? name.slice(slashIdx + 1) : "";
       if (reserved.includes(prefix)) {
         return {
           ruleId: "branch-name",
@@ -141,10 +144,17 @@ function branchNameRule(allowed: string[], reserved: string[]): Rule {
           fix: `use an allowed prefix instead: ${allowed.join(", ")}`,
         };
       }
-      if (!pattern.test(name)) {
+      if (!allowed.includes(prefix) || slug.length === 0) {
         return {
           ruleId: "branch-name",
-          message: `Branch "${name}" must be <type>/<kebab-case-slug>; type must be one of: ${allowed.join(", ")}.`,
+          message: `Branch "${name}" must be <type>/<slug> with type one of: ${allowed.join(", ")}.`,
+          fix: `e.g. ${allowed[0]}/short-descriptive-slug`,
+        };
+      }
+      if (strictKebab && !kebab.test(slug)) {
+        return {
+          ruleId: "branch-name",
+          message: `Branch slug "${slug}" must be kebab-case (lowercase letters, digits, single dashes).`,
           fix: `e.g. ${allowed[0]}/short-descriptive-slug`,
         };
       }

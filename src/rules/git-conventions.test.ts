@@ -80,3 +80,15 @@ test("payment path requires payment section", () => {
   expect(ids(cmd, { changedFiles: ["src/checkout/pay.ts"] })).toContain("pr-path-section");
   expect(ids(cmd, { changedFiles: ["src/home/x.ts"] })).not.toContain("pr-path-section");
 });
+
+test("strict kebab is opt-in; ticket-id slugs allowed when lenient", () => {
+  const strict = buildGitConventionsPack({
+    branch: { allowedPrefixes: ["feat"], reservedPrefixes: [], slug: "kebab-case" },
+  });
+  const lenient = buildGitConventionsPack({ branch: { allowedPrefixes: ["feat"], reservedPrefixes: [] } });
+  const run = (rs: ReturnType<typeof buildGitConventionsPack>, cmd: string): string[] =>
+    evaluate(parseCommand(cmd), rs, createStaticContext({})).map((v) => v.ruleId);
+  expect(run(strict, "git checkout -b feat/BF-170-thing")).toContain("branch-name");
+  expect(run(lenient, "git checkout -b feat/BF-170-thing")).not.toContain("branch-name");
+  expect(run(lenient, "git checkout -b nope/x")).toContain("branch-name");
+});
