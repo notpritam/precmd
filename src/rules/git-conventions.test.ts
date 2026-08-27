@@ -11,8 +11,8 @@ const cfg: GitConfig = {
   protectedBranches: ["staging", "main"],
   defaultBase: "staging",
   branch: { allowedPrefixes: ["feat", "fix", "bug"], reservedPrefixes: ["codex", "claude"] },
-  commit: { denyNoVerify: true },
-  push: { denyForceToProtected: true, denyNoVerify: true },
+  commit: { denyNoVerify: true, denyOnProtected: true },
+  push: { denyForceToProtected: true, denyDirectToProtected: true, denyNoVerify: true },
   pr: {
     requireBase: "staging",
     requireBodyMarker: "### React 19 / Compiler notes",
@@ -29,10 +29,13 @@ test("pack builds all expected rule ids", () => {
     [
       "branch-name",
       "commit-no-verify",
+      "commit-on-protected",
+      "merge-no-verify",
       "pr-base",
       "pr-branch-template",
       "pr-marker",
       "pr-path-section",
+      "push-direct-protected",
       "push-force-protected",
       "push-no-verify",
     ].sort(),
@@ -91,4 +94,20 @@ test("strict kebab is opt-in; ticket-id slugs allowed when lenient", () => {
   expect(run(strict, "git checkout -b feat/BF-170-thing")).toContain("branch-name");
   expect(run(lenient, "git checkout -b feat/BF-170-thing")).not.toContain("branch-name");
   expect(run(lenient, "git checkout -b nope/x")).toContain("branch-name");
+});
+
+test("commit on a protected branch is blocked; feature branch is fine", () => {
+  expect(ids("git commit -m x", { branch: "staging" })).toContain("commit-on-protected");
+  expect(ids("git commit -m x", { branch: "feat/x" })).not.toContain("commit-on-protected");
+});
+
+test("direct push to protected blocked; force still separately blocked; feature push ok", () => {
+  expect(ids("git push origin staging", { branch: "feat/x" })).toContain("push-direct-protected");
+  expect(ids("git push --force origin staging", { branch: "feat/x" })).toContain("push-force-protected");
+  expect(ids("git push --force origin staging", { branch: "feat/x" })).not.toContain("push-direct-protected");
+  expect(ids("git push origin feat/x", { branch: "feat/x" })).not.toContain("push-direct-protected");
+});
+
+test("merge --no-verify is blocked", () => {
+  expect(ids("git merge --no-verify main")).toContain("merge-no-verify");
 });

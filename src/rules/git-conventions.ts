@@ -38,6 +38,21 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
         fix: "remove --no-verify / -n and fix what the hook reports",
       }),
     );
+    rules.push(
+      denyFlag({
+        id: "merge-no-verify",
+        description: "git merge must not bypass hooks",
+        command: "git",
+        subcommand: "merge",
+        flags: ["--no-verify"],
+        message: "git merge --no-verify is banned — merge commits must pass the hooks too.",
+        fix: "remove --no-verify",
+      }),
+    );
+  }
+
+  if (git.commit?.denyOnProtected) {
+    rules.push(commitOnProtectedRule(git.protectedBranches ?? ["main"]));
   }
 
   if (git.push?.denyNoVerify) {
@@ -66,6 +81,10 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
 
   if (git.push?.denyForceToProtected) {
     rules.push(pushForceRule(git.protectedBranches ?? ["main"]));
+  }
+
+  if (git.push?.denyDirectToProtected) {
+    rules.push(pushDirectRule(git.protectedBranches ?? ["main"]));
   }
 
   if (git.pr?.requireBase) {
@@ -167,6 +186,16 @@ function stripRef(t: string): string {
   return t.replace(/^refs\/heads\//, "");
 }
 
+/** True when a `git push` targets a protected branch (explicit refspec or implicit current branch). */
+function pushTargetsProtected(inv: Invocation, ctx: Context, protectedBranches: string[]): boolean {
+  const after = positionals(inv.argv).slice(1); // drop "push"; may be [remote, refspec...]
+  const targets = after.map((p) => stripRef(p.includes(":") ? p.slice(p.indexOf(":") + 1) : p));
+  const explicitHit = targets.some((t) => protectedBranches.includes(t));
+  const current = ctx.branch();
+  const implicitHit = after.length <= 1 && current !== null && protectedBranches.includes(current);
+  return explicitHit || implicitHit;
+}
+
 function pushForceRule(protectedBranches: string[]): Rule {
   return {
     id: "push-force-protected",
@@ -174,16 +203,45 @@ function pushForceRule(protectedBranches: string[]): Rule {
     appliesTo: { command: "git", subcommand: "push" },
     evaluate(inv, ctx) {
       if (!hasFlag(inv.argv, FORCE_FLAGS)) return null;
-      const after = positionals(inv.argv).slice(1); // drop "push"; may be [remote, refspec...]
-      const targets = after.map((p) => stripRef(p.includes(":") ? p.slice(p.indexOf(":") + 1) : p));
-      const explicitHit = targets.some((t) => protectedBranches.includes(t));
-      const current = ctx.branch();
-      const implicitHit = after.length <= 1 && current !== null && protectedBranches.includes(current);
-      if (!explicitHit && !implicitHit) return null;
+      if (!pushTargetsProtected(inv, ctx, protectedBranches)) return null;
       return {
         ruleId: "push-force-protected",
         message: `Force-pushing to a protected branch (${protectedBranches.join(", ")}) is banned.`,
         fix: "drop --force, or push a feature branch and open a PR",
+      };
+    },
+  };
+}
+
+function pushDirectRule(protectedBranches: string[]): Rule {
+  return {
+    id: "push-direct-protected",
+    description: "protected-branch changes must land via PR, not a direct push",
+    appliesTo: { command: "git", subcommand: "push" },
+    evaluate(inv, ctx) {
+      if (hasFlag(inv.argv, FORCE_FLAGS)) return null; // force is handled by push-force-protected
+      if (!pushTargetsProtected(inv, ctx, protectedBranches)) return null;
+      return {
+        ruleId: "push-direct-protected",
+        message: `Pushing directly to a protected branch (${protectedBranches.join(", ")}) is banned — land changes via a PR.`,
+        fix: "push a feature branch and open a PR to the protected branch",
+      };
+    },
+  };
+}
+
+function commitOnProtectedRule(protectedBranches: string[]): Rule {
+  return {
+    id: "commit-on-protected",
+    description: "never commit directly on a protected branch — branch first",
+    appliesTo: { command: "git", subcommand: "commit" },
+    evaluate(inv, ctx) {
+      const current = ctx.branch();
+      if (current === null || !protectedBranches.includes(current)) return null;
+      return {
+        ruleId: "commit-on-protected",
+        message: `You are on protected branch "${current}" — never commit here; create a feature branch first.`,
+        fix: "git checkout -b <type>/<slug>, then commit on that branch",
       };
     },
   };

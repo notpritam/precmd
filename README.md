@@ -17,10 +17,11 @@ command-agnostic — write a rule against any command (`git`, `gh`, `rm`, `curl`
 
 ## What it catches (git pack)
 
-- `git commit --no-verify` / `-n` — hook-bypassing commits
+- `git commit --no-verify` / `-n` (and `git merge --no-verify`) — hook-bypassing commits
+- Committing directly **on** a protected branch (`staging`/`main`) — branch first
 - Branch names off-convention — enforce `type/kebab-slug`, an allowed prefix
   list, and reserved tool-owned prefixes you must not hand-create
-- `git push --force` to protected branches (`main`, `staging`, …)
+- `git push --force` **or** direct push to protected branches (`main`, `staging`, …)
 - `gh pr create` against the wrong base branch
 - PR bodies missing a required marker/section (e.g. a review-notes block)
 - The wrong PR template for a branch class (e.g. `bug/*` must use the bug template)

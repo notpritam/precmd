@@ -60,8 +60,8 @@ export interface GitConfig {
     reservedPrefixes?: string[];
     slug?: "kebab-case";
   };
-  commit?: { denyNoVerify?: boolean };
-  push?: { denyForceToProtected?: boolean; denyNoVerify?: boolean };
+  commit?: { denyNoVerify?: boolean; denyOnProtected?: boolean };
+  push?: { denyForceToProtected?: boolean; denyDirectToProtected?: boolean; denyNoVerify?: boolean };
   pr?: {
     requireBase?: string;
     requireBodyMarker?: string | string[];
