@@ -172,6 +172,14 @@ Pure-declarative users can use `precmd.config.json` (the same shape minus the
   network fetch on every command (slow, offline-fragile). Install `precmd` as a
   devDependency and point the hook at `node_modules/.bin/precmd`, or **vendor the
   single-file build** into `.claude/hooks/` for a fully self-contained repo.
+- **Vendoring into a repo that lints committed hooks.** If the consumer lints or
+  formats every committed JS file (E1ectron lints `.claude/hooks/*`), a minified
+  bundle can't pass source linters. Vendor the build **without a JS extension**
+  (e.g. `.claude/hooks/precmd`): Node still runs it as CommonJS (absent a
+  `type: module` package), yet it is invisible to oxlint/ESLint (not a
+  `.js`/`.cjs`/… file) and to Prettier (no inferable parser) — the honest
+  classification for a generated artifact. The build carries an `ABOUTME` banner
+  so header-lints on any sibling files stay satisfied.
 
 ### E1ectron as the first consumer
 E1ectron adopts `precmd` by committing:
