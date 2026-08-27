@@ -1,0 +1,48 @@
+{
+  "name": "precmd",
+  "version": "0.0.0",
+  "description": "Deterministic pre-command guardrails for AI coding agents — a Claude Code PreToolUse hook that blocks convention-violating shell commands before they run.",
+  "type": "module",
+  "bin": {
+    "precmd": "dist/cli.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "DESIGN.md"
+  ],
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=cjs --target=node18 --outfile=dist/cli.cjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude-code",
+    "hooks",
+    "pretooluse",
+    "ai-agents",
+    "agent-safety",
+    "guardrails",
+    "git",
+    "policy"
+  ],
+  "author": "notpritam (https://github.com/notpritam)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/notpritam/precmd.git"
+  },
+  "bugs": {
+    "url": "https://github.com/notpritam/precmd/issues"
+  },
+  "homepage": "https://github.com/notpritam/precmd#readme",
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}
