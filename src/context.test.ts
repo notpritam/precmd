@@ -10,7 +10,7 @@ test("static context returns injected facts", () => {
     files: { "a.md": "hi" },
   });
   expect(ctx.branch()).toBe("bug/x");
-  expect(ctx.changedFiles()).toEqual(["src/checkout/pay.ts"]);
+  expect(ctx.filesChangedVsBase("staging")).toEqual(["src/checkout/pay.ts"]);
   expect(ctx.readRepoFile("a.md")).toBe("hi");
   expect(ctx.readRepoFile("missing")).toBeNull();
 });
@@ -19,5 +19,5 @@ test("git context reads the real repo without throwing", () => {
   const ctx = createGitContext(process.cwd());
   const root = ctx.repoRoot();
   expect(root === null || root.endsWith("precmd")).toBe(true);
-  expect(() => ctx.changedFiles()).not.toThrow();
+  expect(() => ctx.filesChangedVsBase("main")).not.toThrow();
 });

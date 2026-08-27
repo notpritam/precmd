@@ -36,27 +36,29 @@ export function createGitContext(cwd: string): Context {
     return b && b !== "HEAD" ? b : null;
   });
   const repoRoot = memo((): string | null => git(cwd, ["rev-parse", "--show-toplevel"]));
-  const changedFiles = memo((): string[] => {
-    const outputs = [
-      git(cwd, ["diff", "--name-only"]),
-      git(cwd, ["diff", "--name-only", "--cached"]),
-      git(cwd, ["ls-files", "--others", "--exclude-standard"]),
-    ];
-    const all = new Set<string>();
-    for (const out of outputs) {
-      if (!out) continue;
-      for (const line of out.split("\n")) {
-        const p = line.trim();
-        if (p) all.add(p);
+  const changedCache = new Map<string, string[]>();
+  const filesChangedVsBase = (base: string): string[] => {
+    const cached = changedCache.get(base);
+    if (cached) return cached;
+    let files: string[] = [];
+    for (const ref of [base, `origin/${base}`]) {
+      const out = git(cwd, ["diff", "--name-only", `${ref}...HEAD`]);
+      if (out !== null) {
+        files = out
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        break;
       }
     }
-    return [...all];
-  });
+    changedCache.set(base, files);
+    return files;
+  };
 
   return {
     cwd,
     branch,
-    changedFiles,
+    filesChangedVsBase,
     repoRoot,
     readRepoFile(relPath: string): string | null {
       const root = repoRoot() ?? cwd;
@@ -82,7 +84,7 @@ export function createStaticContext(init: {
   return {
     cwd: init.cwd ?? "/tmp",
     branch: () => init.branch ?? null,
-    changedFiles: () => init.changedFiles ?? [],
+    filesChangedVsBase: () => init.changedFiles ?? [],
     repoRoot: () => init.repoRoot ?? null,
     readRepoFile: (relPath: string) => (relPath in files ? files[relPath]! : null),
   };

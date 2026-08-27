@@ -26,8 +26,8 @@ export interface Context {
   readonly cwd: string;
   /** current branch, or null when not in a repo / detached. Memoized. */
   branch(): string | null;
-  /** paths changed vs HEAD (staged + unstaged + untracked), repo-relative. Memoized. */
-  changedFiles(): string[];
+  /** files changed on this branch relative to `base` (base...HEAD), repo-relative. Memoized per base. */
+  filesChangedVsBase(base: string): string[];
   /** absolute repo root, or null. Memoized. */
   repoRoot(): string | null;
   /** read a repo-relative file, or null when missing/unreadable. */
@@ -65,7 +65,7 @@ export interface GitConfig {
   pr?: {
     requireBase?: string;
     requireBodyMarker?: string | string[];
-    branchTemplates?: { branchPrefix: string; template: string }[];
+    branchTemplates?: { branchPrefix: string; template: string; requireMarker?: string }[];
     pathSectionRules?: { changedGlobs: string[]; requireSection: string }[];
   };
 }
