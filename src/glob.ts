@@ -22,7 +22,8 @@ export function globToRegExp(glob: string): RegExp {
       re += c;
     }
   }
-  return new RegExp("^" + re + "$");
+  // Case-insensitive: file-path keyword matches (e.g. checkout/Checkout) should not depend on case.
+  return new RegExp("^" + re + "$", "i");
 }
 
 /** True when `path` matches `glob`. */

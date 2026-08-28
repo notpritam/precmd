@@ -16,3 +16,9 @@ test("* stays within a single segment", () => {
 test("prefix glob with trailing **", () => {
   expect(globMatch("**/payment*/**", "src/paymentApi/x.ts")).toBe(true);
 });
+
+test("filename keyword globs match case-insensitively", () => {
+  expect(globMatch("**/*checkout*", "src/hooks/useChurnCheckout.ts")).toBe(true);
+  expect(globMatch("**/*payment*", "src/lib/paymentUtils.ts")).toBe(true);
+  expect(globMatch("**/*checkout*", "src/home/list.ts")).toBe(false);
+});
