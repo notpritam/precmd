@@ -61,3 +61,13 @@ test("sequence operators do not create pipedTo links", () => {
   const invs = parseCommand("a && b ; c");
   expect(invs.every((i) => (i.pipedTo ?? []).length === 0)).toBe(true);
 });
+
+test("reveals the inner command behind wrappers, keywords, -c strings, and gh pr new", () => {
+  const has = (cmd: string, argv: string[]) =>
+    parseCommand(cmd).some((i) => i.argv.join(" ") === argv.join(" "));
+  expect(has("command git commit -n", ["git", "commit", "-n"])).toBe(true);
+  expect(has("sudo git status", ["git", "status"])).toBe(true);
+  expect(has("if true; then git commit -n; fi", ["git", "commit", "-n"])).toBe(true);
+  expect(has('bash -c "git push --force"', ["git", "push", "--force"])).toBe(true);
+  expect(has("gh pr new --base main", ["gh", "pr", "create", "--base", "main"])).toBe(true);
+});

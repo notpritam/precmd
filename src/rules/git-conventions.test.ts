@@ -31,9 +31,12 @@ test("pack builds all expected rule ids", () => {
       "commit-no-verify",
       "commit-on-protected",
       "merge-no-verify",
+      "pull-no-verify",
       "pr-base",
+      "pr-edit-base",
       "pr-branch-template",
       "pr-marker",
+      "pr-edit-marker",
       "pr-path-section",
       "push-direct-protected",
       "push-force-protected",
@@ -110,6 +113,44 @@ test("direct push to protected blocked; force still separately blocked; feature 
 
 test("merge --no-verify is blocked", () => {
   expect(ids("git merge --no-verify main")).toContain("merge-no-verify");
+});
+
+test("git global options do not bypass subcommand rules", () => {
+  expect(ids("git -C /x commit --no-verify -m y")).toContain("commit-no-verify");
+  expect(ids("git -c core.hooksPath=/dev/null commit -n")).toContain("commit-no-verify");
+});
+
+test("shell wrappers and keywords are unwrapped before matching", () => {
+  expect(ids("command git commit --no-verify")).toContain("commit-no-verify");
+  expect(ids("if true; then git commit -n; fi")).toContain("commit-no-verify");
+  expect(ids('bash -c "git commit --no-verify"')).toContain("commit-no-verify");
+});
+
+test("gh pr new alias is enforced like gh pr create", () => {
+  expect(ids("gh pr new --base main --body hi")).toContain("pr-base");
+});
+
+test("git pull --no-verify is blocked", () => {
+  expect(ids("git pull --no-verify")).toContain("pull-no-verify");
+});
+
+test("gh pr edit base + marker guards", () => {
+  expect(ids("gh pr edit --base main")).toContain("pr-edit-base");
+  expect(ids("gh pr edit --base staging")).not.toContain("pr-edit-base");
+  expect(ids("gh pr edit --body nope")).toContain("pr-edit-marker");
+  expect(ids("gh pr edit --add-label x")).not.toContain("pr-edit-marker");
+});
+
+test("bug-template check uses --head when supplied", () => {
+  expect(
+    ids('gh pr create --head bug/x --base staging --body "### React 19 / Compiler notes"'),
+  ).toContain("pr-branch-template");
+});
+
+test("bulk push modes and short/orphan branch-creation flags", () => {
+  expect(ids("git push --all origin", { branch: "feat/x" })).toContain("push-direct-protected");
+  expect(ids("git switch --create feature/bad")).toContain("branch-name");
+  expect(ids("git checkout --orphan feature/bad")).toContain("branch-name");
 });
 
 test("git rules are repo-scoped: a cross-repo push is not blocked", () => {

@@ -1,9 +1,10 @@
 // ABOUTME: Built-in git/gh/PR convention rule pack, assembled from GitConfig.
 // ABOUTME: Combines declarative factories with context-aware programmatic rules.
 import { flagValue, hasFlag, positionals } from "../argv";
+import { gitArgv } from "../engine";
 import { globMatch } from "../glob";
 import type { Context, GitConfig, Invocation, Rule } from "../types";
-import { denyFlag, requireFlagValue } from "./declarative";
+import { denyFlag } from "./declarative";
 
 const DEFAULT_ALLOWED_PREFIXES = [
   "feat",
@@ -49,6 +50,17 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
         fix: "remove --no-verify",
       }),
     );
+    rules.push(
+      denyFlag({
+        id: "pull-no-verify",
+        description: "git pull (merge) must not bypass hooks",
+        command: "git",
+        subcommand: "pull",
+        flags: ["--no-verify"],
+        message: "git pull --no-verify is banned — a pull that merges must pass the hooks too.",
+        fix: "remove --no-verify",
+      }),
+    );
   }
 
   if (git.commit?.denyOnProtected) {
@@ -88,22 +100,15 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
   }
 
   if (git.pr?.requireBase) {
-    const base = git.pr.requireBase;
-    rules.push(
-      requireFlagValue({
-        id: "pr-base",
-        description: "PRs must target the integration branch",
-        command: "gh",
-        subcommand: ["pr", "create"],
-        flag: "--base",
-        equals: base,
-        message: `gh pr create must target "${base}" — pass --base ${base}.`,
-      }),
-    );
+    rules.push(prBaseRule(git.pr.requireBase));
+    rules.push(prEditBaseRule(git.pr.requireBase));
   }
 
   const markers = normalizeMarkers(git.pr?.requireBodyMarker);
-  if (markers.length) rules.push(prMarkerRule(markers));
+  if (markers.length) {
+    rules.push(prMarkerRule(markers));
+    rules.push(prEditMarkerRule(markers));
+  }
 
   if (git.pr?.branchTemplates?.length) rules.push(prTemplateRule(git.pr.branchTemplates));
 
@@ -131,16 +136,102 @@ function prBody(inv: Invocation, ctx: Context): string {
   return text;
 }
 
-/** The name of a branch being created, across checkout -b / switch -c / branch <name>. */
+/** The PR's head branch: --head/-H when supplied, else the current branch. */
+function prHeadBranch(inv: Invocation, ctx: Context): string | null {
+  return flagValue(inv.argv, "--head") ?? flagValue(inv.argv, "-H") ?? ctx.branch();
+}
+
+/** The requested PR base from --base/-B. */
+function prBaseValue(inv: Invocation): string | null {
+  return flagValue(inv.argv, "--base") ?? flagValue(inv.argv, "-B");
+}
+
+/** Whether a gh pr command sets a body (any of --body/-b/--body-file/-F). */
+function prSetsBody(inv: Invocation): boolean {
+  return (
+    flagValue(inv.argv, "--body") !== null ||
+    flagValue(inv.argv, "-b") !== null ||
+    flagValue(inv.argv, "--body-file") !== null ||
+    flagValue(inv.argv, "-F") !== null
+  );
+}
+
+function prBaseRule(requireBase: string): Rule {
+  return {
+    id: "pr-base",
+    description: "PRs must target the integration branch",
+    appliesTo: { command: "gh", subcommand: ["pr", "create"] },
+    evaluate(inv) {
+      const base = prBaseValue(inv);
+      if (base === requireBase) return null;
+      const detail = base === null ? "it was omitted" : `got "${base}"`;
+      return {
+        ruleId: "pr-base",
+        message: `gh pr create must target "${requireBase}" (${detail}).`,
+        fix: `--base ${requireBase}`,
+      };
+    },
+  };
+}
+
+function prEditBaseRule(requireBase: string): Rule {
+  return {
+    id: "pr-edit-base",
+    description: "gh pr edit must not retarget the base to a non-integration branch",
+    appliesTo: { command: "gh", subcommand: ["pr", "edit"] },
+    evaluate(inv) {
+      const base = prBaseValue(inv);
+      if (base === null || base === requireBase) return null; // only fires when the base is explicitly changed
+      return {
+        ruleId: "pr-edit-base",
+        message: `gh pr edit must not change the base to "${base}" — it must stay "${requireBase}".`,
+        fix: `--base ${requireBase}`,
+      };
+    },
+  };
+}
+
+function prEditMarkerRule(markers: string[]): Rule {
+  return {
+    id: "pr-edit-marker",
+    description: "a gh pr edit that sets a body must keep the required marker(s)",
+    appliesTo: { command: "gh", subcommand: ["pr", "edit"] },
+    evaluate(inv, ctx) {
+      if (!prSetsBody(inv)) return null;
+      const body = prBody(inv, ctx);
+      const missing = markers.filter((m) => !body.includes(m));
+      if (missing.length === 0) return null;
+      const list = missing.map((m) => `"${m}"`).join(", ");
+      return {
+        ruleId: "pr-edit-marker",
+        message: `gh pr edit sets a body missing required section(s): ${list}.`,
+        fix: `include ${list} in the new body`,
+      };
+    },
+  };
+}
+
+/** The name of a branch being created, across checkout/switch/branch (incl. --orphan/--create). */
 function newBranchName(inv: Invocation): string | null {
-  const sub = inv.argv[1];
-  if (sub === "checkout") return flagValue(inv.argv, "-b") ?? flagValue(inv.argv, "-B");
-  if (sub === "switch") return flagValue(inv.argv, "-c") ?? flagValue(inv.argv, "-C");
+  const argv = gitArgv(inv);
+  const sub = argv[1];
+  if (sub === "checkout") {
+    return flagValue(argv, "--orphan") ?? flagValue(argv, "-b") ?? flagValue(argv, "-B");
+  }
+  if (sub === "switch") {
+    return (
+      flagValue(argv, "--orphan") ??
+      flagValue(argv, "-c") ??
+      flagValue(argv, "-C") ??
+      flagValue(argv, "--create") ??
+      flagValue(argv, "--force-create")
+    );
+  }
   if (sub === "branch") {
-    if (hasFlag(inv.argv, ["-d", "-D", "--delete", "-m", "-M", "--move", "-a", "--list", "-r", "--all"])) {
+    if (hasFlag(argv, ["-d", "-D", "--delete", "-m", "-M", "--move", "-a", "--list", "-r", "--all"])) {
       return null;
     }
-    return positionals(inv.argv)[1] ?? null; // positionals = ["branch", <name>, ...]
+    return positionals(argv)[1] ?? null; // positionals = ["branch", <name>, ...]
   }
   return null;
 }
@@ -188,9 +279,11 @@ function stripRef(t: string): string {
   return t.replace(/^refs\/heads\//, "");
 }
 
-/** True when a `git push` targets a protected branch (explicit refspec or implicit current branch). */
+/** True when a `git push` targets a protected branch (explicit refspec, bulk mode, or implicit current branch). */
 function pushTargetsProtected(inv: Invocation, ctx: Context, protectedBranches: string[]): boolean {
-  const after = positionals(inv.argv).slice(1); // drop "push"; may be [remote, refspec...]
+  const argv = gitArgv(inv);
+  if (hasFlag(argv, ["--all", "--mirror"])) return true; // bulk push includes protected refs
+  const after = positionals(argv).slice(1); // drop "push"; may be [remote, refspec...]
   const targets = after.map((p) => stripRef(p.includes(":") ? p.slice(p.indexOf(":") + 1) : p));
   const explicitHit = targets.some((t) => protectedBranches.includes(t));
   const current = ctx.branch();
@@ -274,7 +367,7 @@ function prTemplateRule(entries: { branchPrefix: string; template: string; requi
     description: "certain branch classes must use a specific PR template",
     appliesTo: { command: "gh", subcommand: ["pr", "create"] },
     evaluate(inv, ctx) {
-      const branch = ctx.branch();
+      const branch = prHeadBranch(inv, ctx);
       if (!branch) return null;
       for (const e of entries) {
         if (!branch.startsWith(e.branchPrefix + "/")) continue;

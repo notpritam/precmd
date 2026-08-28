@@ -18,6 +18,12 @@ test("subcommandTokens stops at first flag", () => {
   expect(subcommandTokens(inv(["gh", "pr", "create", "--base", "x"]))).toEqual(["pr", "create"]);
 });
 
+test("subcommandTokens skips git global options", () => {
+  expect(subcommandTokens(inv(["git", "-C", "/x", "commit", "-m", "y"]))).toEqual(["commit"]);
+  expect(subcommandTokens(inv(["git", "-c", "a.b=c", "commit"]))).toEqual(["commit"]);
+  expect(subcommandTokens(inv(["git", "--git-dir=/x", "push"]))).toEqual(["push"]);
+});
+
 test("array subcommand is an ordered prefix", () => {
   expect(ruleApplies(mk("r", { command: "gh", subcommand: ["pr", "create"] }), inv(["gh", "pr", "create"]))).toBe(
     true,
@@ -42,8 +48,14 @@ test("evaluate collects all violations across invocations", () => {
 test("wildcard command rule applies to any command", () => {
   const r = mk("w", { command: "*" });
   expect(ruleApplies(r, inv(["anything", "x"]))).toBe(true);
-  const out = evaluate([inv(["foo"]), inv(["bar"])], [r], {} as never);
-  expect(out.map((v) => v.ruleId)).toEqual(["w", "w"]);
+  const echo: Rule = {
+    id: "w",
+    description: "w",
+    appliesTo: { command: "*" },
+    evaluate: (i) => ({ ruleId: "w", message: i.argv[0]! }),
+  };
+  const out = evaluate([inv(["foo"]), inv(["bar"])], [echo], {} as never);
+  expect(out.map((v) => v.message)).toEqual(["foo", "bar"]);
 });
 
 test("scoped rules skip commands targeting another repo (via cd or -C)", () => {

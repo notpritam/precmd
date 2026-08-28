@@ -144,6 +144,78 @@ function scan(raw: string): Scan {
 
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+// Wrappers that precede the real command (dropped along with their options/env).
+const WRAPPERS = new Set([
+  "command",
+  "builtin",
+  "exec",
+  "sudo",
+  "doas",
+  "env",
+  "nohup",
+  "setsid",
+  "nocorrect",
+  "xargs",
+]);
+// Shell keywords/prefixes that lead a command inside a compound statement.
+const KEYWORDS = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "("]);
+// Shells that run a command string passed after `-c`.
+const SHELL_C = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+
+/**
+ * Reveal the real command behind shell wrappers, keywords, and `-c`/`eval`
+ * strings so `command git …`, `if …; then git commit -n`, `bash -c "git …"`,
+ * and `gh pr new` cannot slip past command matching.
+ */
+function unwrap(inv: Invocation, depth: number): Invocation[] {
+  if (depth > 12) return [inv];
+  let argv = inv.argv;
+  let changed = false;
+  // Peel leading keywords and wrappers (with their options / env-assignments).
+  for (;;) {
+    const head = argv[0];
+    if (head !== undefined && KEYWORDS.has(head)) {
+      argv = argv.slice(1);
+      changed = true;
+      continue;
+    }
+    if (head !== undefined && WRAPPERS.has(head) && argv.length > 1) {
+      let i = 1;
+      while (i < argv.length && (argv[i]!.startsWith("-") || ENV_ASSIGN.test(argv[i]!))) i++;
+      argv = argv.slice(i);
+      changed = true;
+      continue;
+    }
+    break;
+  }
+  if (argv.length === 0) return [inv];
+  // Keep the original invocation too, so a rule can still match the wrapper itself.
+  // `sh -c "git …"` — re-parse the script string.
+  if (SHELL_C.has(argv[0]!)) {
+    const ci = argv.indexOf("-c");
+    if (ci >= 0 && argv[ci + 1] !== undefined) return [inv, ...parseCommand(argv[ci + 1]!)];
+  }
+  // `eval "git …"` — re-parse the remainder.
+  if (argv[0] === "eval") {
+    const rest = argv.slice(1).join(" ");
+    return rest.trim() ? [inv, ...parseCommand(rest)] : [inv];
+  }
+  // `gh pr new` is a documented alias of `gh pr create`.
+  if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "new") {
+    argv = ["gh", "pr", "create", ...argv.slice(3)];
+    changed = true;
+  }
+  if (!changed) return [inv];
+  const revealed: Invocation = {
+    argv,
+    env: inv.env,
+    raw: argv.join(" "),
+    uncertain: inv.uncertain,
+    pipedTo: inv.pipedTo,
+  };
+  return [inv, revealed];
+}
+
 function buildInvocation(tokens: string[], uncertain: boolean): Invocation | null {
   const env: Record<string, string> = {};
   let k = 0;
@@ -182,7 +254,9 @@ export function parseCommand(raw: string): Invocation[] {
     start = end + 1;
   }
 
-  const invocations: Invocation[] = perSegment.filter((i): i is Invocation => i !== null);
+  const invocations: Invocation[] = perSegment
+    .filter((i): i is Invocation => i !== null)
+    .flatMap((i) => unwrap(i, 0));
   for (const inner of subs) {
     if (inner.trim()) invocations.push(...parseCommand(inner));
   }
