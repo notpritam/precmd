@@ -156,6 +156,13 @@ function prSetsBody(inv: Invocation): boolean {
   );
 }
 
+/** True when the body is piped via `--body-file -` / `-F -` (stdin) with no inline body — unverifiable. */
+function prBodyFromStdin(inv: Invocation): boolean {
+  const file = flagValue(inv.argv, "--body-file") ?? flagValue(inv.argv, "-F");
+  const inline = flagValue(inv.argv, "--body") ?? flagValue(inv.argv, "-b");
+  return file === "-" && inline === null;
+}
+
 function prBaseRule(requireBase: string): Rule {
   return {
     id: "pr-base",
@@ -198,6 +205,7 @@ function prEditMarkerRule(markers: string[]): Rule {
     appliesTo: { command: "gh", subcommand: ["pr", "edit"] },
     evaluate(inv, ctx) {
       if (!prSetsBody(inv)) return null;
+      if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify
       const body = prBody(inv, ctx);
       const missing = markers.filter((m) => !body.includes(m));
       if (missing.length === 0) return null;
@@ -348,6 +356,7 @@ function prMarkerRule(markers: string[]): Rule {
     description: "PR body must contain required marker section(s)",
     appliesTo: { command: "gh", subcommand: ["pr", "create"] },
     evaluate(inv, ctx) {
+      if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify, don't false-block
       const body = prBody(inv, ctx);
       const missing = markers.filter((m) => !body.includes(m));
       if (missing.length === 0) return null;
@@ -379,7 +388,7 @@ function prTemplateRule(entries: { branchPrefix: string; template: string; requi
             fix: `copy ${e.template} to a temp file, fill it in, then pass --body-file <that file>`,
           };
         }
-        if (e.requireMarker) {
+        if (e.requireMarker && !prBodyFromStdin(inv)) {
           const body = prBody(inv, ctx);
           if (!body.includes(e.requireMarker)) {
             return {
@@ -404,6 +413,7 @@ function prPathSectionRule(
     description: "changed paths require a corresponding PR body section",
     appliesTo: { command: "gh", subcommand: ["pr", "create"] },
     evaluate(inv, ctx) {
+      if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify the section
       const changed = ctx.filesChangedVsBase(base);
       if (changed.length === 0) return null;
       const body = prBody(inv, ctx);

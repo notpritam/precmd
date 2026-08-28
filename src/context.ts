@@ -48,7 +48,8 @@ export function createGitContext(cwd: string): Context {
     const cached = changedCache.get(base);
     if (cached) return cached;
     let files: string[] = [];
-    for (const ref of [base, `origin/${base}`]) {
+    // Prefer the remote base (a local base branch can be stale/behind).
+    for (const ref of [`origin/${base}`, base]) {
       const out = git(cwd, ["diff", "--name-only", `${ref}...HEAD`]);
       if (out !== null) {
         files = out

@@ -153,6 +153,14 @@ test("bulk push modes and short/orphan branch-creation flags", () => {
   expect(ids("git checkout --orphan feature/bad")).toContain("branch-name");
 });
 
+test("piped body via --body-file - (stdin) is not false-blocked", () => {
+  expect(ids("gh pr create --base staging --body-file -")).not.toContain("pr-marker");
+  expect(
+    ids("gh pr create --base staging --body-file -", { changedFiles: ["src/checkout/pay.ts"] }),
+  ).not.toContain("pr-path-section");
+  expect(ids("gh pr edit --body-file -")).not.toContain("pr-edit-marker");
+});
+
 test("git rules are repo-scoped: a cross-repo push is not blocked", () => {
   const cross = createStaticContext({
     cwd: "/e1",
