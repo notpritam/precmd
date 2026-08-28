@@ -111,3 +111,18 @@ test("direct push to protected blocked; force still separately blocked; feature 
 test("merge --no-verify is blocked", () => {
   expect(ids("git merge --no-verify main")).toContain("merge-no-verify");
 });
+
+test("git rules are repo-scoped: a cross-repo push is not blocked", () => {
+  const cross = createStaticContext({
+    cwd: "/e1",
+    repoRoot: "/e1",
+    repoRoots: { "/e1": "/e1", "/other": "/other" },
+  });
+  expect(evaluate(parseCommand("git -C /other push origin main"), rules, cross).map((v) => v.ruleId)).not.toContain(
+    "push-direct-protected",
+  );
+  const same = createStaticContext({ cwd: "/e1", repoRoot: "/e1", branch: "feat/x" });
+  expect(evaluate(parseCommand("git push origin main"), rules, same).map((v) => v.ruleId)).toContain(
+    "push-direct-protected",
+  );
+});

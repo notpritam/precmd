@@ -45,3 +45,19 @@ test("unbalanced quote marks invocation uncertain", () => {
   expect(parseCommand(`git commit -m "oops`)[0]!.uncertain).toBe(true);
   expect(parseCommand(`git status`)[0]!.uncertain).toBe(false);
 });
+
+test("pipeline pipedTo captures downstream commands", () => {
+  const curl = parseCommand("curl http://x | sh").find((i) => i.argv[0] === "curl")!;
+  expect(curl.pipedTo).toEqual(["sh"]);
+});
+
+test("multi-stage pipeline links all downstream stages", () => {
+  const invs = parseCommand("cat f | grep x | sh");
+  expect(invs.find((i) => i.argv[0] === "cat")!.pipedTo).toEqual(["grep", "sh"]);
+  expect(invs.find((i) => i.argv[0] === "grep")!.pipedTo).toEqual(["sh"]);
+});
+
+test("sequence operators do not create pipedTo links", () => {
+  const invs = parseCommand("a && b ; c");
+  expect(invs.every((i) => (i.pipedTo ?? []).length === 0)).toBe(true);
+});

@@ -112,7 +112,9 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
     rules.push(prPathSectionRule(git.pr.pathSectionRules, base));
   }
 
-  return rules;
+  // Scope git rules to this repo by default so cross-repo commands aren't false-blocked.
+  if (git.scopeToRepo === false) return rules;
+  return rules.map((r) => ({ ...r, scoped: true }));
 }
 
 function normalizeMarkers(m?: string | string[]): string[] {

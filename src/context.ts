@@ -36,6 +36,13 @@ export function createGitContext(cwd: string): Context {
     return b && b !== "HEAD" ? b : null;
   });
   const repoRoot = memo((): string | null => git(cwd, ["rev-parse", "--show-toplevel"]));
+  const repoRootForCache = new Map<string, string | null>();
+  const repoRootFor = (dir: string): string | null => {
+    if (repoRootForCache.has(dir)) return repoRootForCache.get(dir)!;
+    const root = git(dir, ["rev-parse", "--show-toplevel"]);
+    repoRootForCache.set(dir, root);
+    return root;
+  };
   const changedCache = new Map<string, string[]>();
   const filesChangedVsBase = (base: string): string[] => {
     const cached = changedCache.get(base);
@@ -60,6 +67,7 @@ export function createGitContext(cwd: string): Context {
     branch,
     filesChangedVsBase,
     repoRoot,
+    repoRootFor,
     readRepoFile(relPath: string): string | null {
       const root = repoRoot() ?? cwd;
       const p = isAbsolute(relPath) ? relPath : join(root, relPath);
@@ -78,14 +86,17 @@ export function createStaticContext(init: {
   branch?: string | null;
   changedFiles?: string[];
   repoRoot?: string | null;
+  repoRoots?: Record<string, string | null>;
   files?: Record<string, string>;
 }): Context {
   const files = init.files ?? {};
+  const repoRoots = init.repoRoots ?? {};
   return {
     cwd: init.cwd ?? "/tmp",
     branch: () => init.branch ?? null,
     filesChangedVsBase: () => init.changedFiles ?? [],
     repoRoot: () => init.repoRoot ?? null,
+    repoRootFor: (dir: string) => (dir in repoRoots ? repoRoots[dir]! : (init.repoRoot ?? null)),
     readRepoFile: (relPath: string) => (relPath in files ? files[relPath]! : null),
   };
 }

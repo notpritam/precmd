@@ -42,6 +42,59 @@ reason. There is **no environment escape hatch**: an agent controls the whole
 command line, so a bypassable gate is no gate. Local override is out-of-band
 (remove the hook).
 
+## Configure any command (no code)
+
+Rules are JSON. Drop a `precmd.config.json` at your repo root — the engine is
+command-agnostic, so you can guard `kubectl`, `terraform`, `rm`, `docker`,
+anything:
+
+```json
+{
+  "packs": ["git-conventions", "safety"],
+  "git": { "commit": { "denyNoVerify": true }, "protectedBranches": ["main"] },
+  "rules": [
+    {
+      "id": "no-prod-kubectl",
+      "command": "kubectl",
+      "subcommand": ["delete"],
+      "when": { "flagEquals": { "flag": "--namespace", "value": "production" } },
+      "message": "No kubectl delete in production.",
+      "fix": "target a staging namespace"
+    },
+    {
+      "id": "no-terraform-apply-on-main",
+      "command": "terraform",
+      "subcommand": "apply",
+      "when": { "onBranch": "^(main|staging)$" },
+      "message": "Apply from a feature branch, not a protected one."
+    }
+  ]
+}
+```
+
+A rule **fires (blocks)** when its `command`/`subcommand` match and `when` is
+true. `"command": "*"` matches any command.
+
+### Conditions
+
+| Condition | Fires when |
+|---|---|
+| `{ "hasFlag": ["--x","-x"] }` | any listed flag is present |
+| `{ "hasShortChar": ["n"] }` | a short cluster contains the char (`-n`, `-vn`) |
+| `{ "flagEquals": { "flag":"--base","value":"staging" } }` | flag present and equals value |
+| `{ "flagNotEquals": { "flag":"--base","value":"staging" } }` | flag missing or ≠ value (to *require* a value) |
+| `{ "requireFlag": "--sign" }` | the flag is absent |
+| `{ "argMatches": "^/$" }` / `{ "argNotMatches": "…" }` | a regex (un)matches any argument |
+| `{ "commandMatches": "^sudo$" }` | regex matches the command word (pair with `"command": "*"`) |
+| `{ "onBranch": "^main$" }` / `{ "notOnBranch": "…" }` | current branch (mis)matches |
+| `{ "changedPathMatches": { "pattern":"**/payment*/**", "base":"main" } }` | a file changed vs base matches the glob |
+| `{ "pipedInto": ["sh","bash"] }` | the command pipes into one of these (`curl … \| sh`) |
+| `{ "all": [ … ] }` · `{ "any": [ … ] }` · `{ "not": … }` | combinators |
+| `{ "always": true }` | always (block a command outright) |
+
+A malformed rule is **skipped, never fatal** — the gate keeps working. Debug with
+`precmd check "<command>"`.
+
 ## Status
 
 Early. See [`DESIGN.md`](./DESIGN.md) for the full architecture and roadmap.

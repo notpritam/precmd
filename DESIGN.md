@@ -209,8 +209,13 @@ zero runtime dependencies.
   message to the agent (plain stdout is dropped). Deferred; may later map to the
   `ask` decision (escalate to the human).
 - **Non-Bash hook events, HTTP/mcp_tool matchers.** Bash `PreToolUse` only.
-- **Non-git rule packs** (`rm -rf` / `curl | sh` safety, etc.) — the engine
-  supports them; they're just not authored in v1.
+
+Shipped since the original scope: a full **declarative condition DSL** (`src/rules/spec.ts`)
+so any command can be guarded from JSON (`hasFlag`, `flagEquals`, `argMatches`,
+`onBranch`, `changedPathMatches`, `pipedInto`, `all`/`any`/`not`, `command: "*"`);
+**pipeline detection** in the parser (`pipedTo`, for `curl | sh`); **command-indexed
+evaluation** for scale; and an opt-in **`safety` rule pack** (`rm -rf`, `curl | sh`,
+`chmod 777`). Malformed specs are skipped, never fatal.
 
 ## 8. Roadmap
 

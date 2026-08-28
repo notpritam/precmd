@@ -1,16 +1,22 @@
 // ABOUTME: Splits a raw shell command line into structured invocations.
-// ABOUTME: Handles separators, quoting, env prefixes, and command substitution.
+// ABOUTME: Handles separators, quoting, env prefixes, command substitution, and pipelines.
 import type { Invocation } from "./types";
 
+interface Segment {
+  tokens: string[];
+  /** true when this segment was terminated by a single `|` (same pipeline continues). */
+  pipeNext: boolean;
+}
+
 interface Scan {
-  segments: string[][];
+  segments: Segment[];
   subs: string[];
   unbalanced: boolean;
 }
 
 /** Tokenize + segment a raw command, respecting quotes and operators. */
 function scan(raw: string): Scan {
-  const segments: string[][] = [];
+  const segments: Segment[] = [];
   const subs: string[] = [];
   let cur: string[] = [];
   let buf = "";
@@ -26,10 +32,10 @@ function scan(raw: string): Scan {
       hasBuf = false;
     }
   };
-  const endSegment = (): void => {
+  const endSegment = (pipeNext: boolean): void => {
     endToken();
     if (cur.length) {
-      segments.push(cur);
+      segments.push({ tokens: cur, pipeNext });
       cur = [];
     }
   };
@@ -102,19 +108,23 @@ function scan(raw: string): Scan {
       continue;
     }
 
-    // top-level operators
+    // top-level operators (order matters: && and || before single | )
     if (c === "&" && raw[i + 1] === "&") {
-      endSegment();
+      endSegment(false);
       i++;
       continue;
     }
     if (c === "|" && raw[i + 1] === "|") {
-      endSegment();
+      endSegment(false);
       i++;
       continue;
     }
-    if (c === "|" || c === ";" || c === "\n") {
-      endSegment();
+    if (c === "|") {
+      endSegment(true); // single pipe: next segment is in the same pipeline
+      continue;
+    }
+    if (c === ";" || c === "\n") {
+      endSegment(false);
       continue;
     }
 
@@ -128,34 +138,53 @@ function scan(raw: string): Scan {
   }
 
   if (inSingle || inDouble) unbalanced = true;
-  endSegment();
+  endSegment(false);
   return { segments, subs, unbalanced };
 }
 
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+function buildInvocation(tokens: string[], uncertain: boolean): Invocation | null {
+  const env: Record<string, string> = {};
+  let k = 0;
+  while (k < tokens.length && ENV_ASSIGN.test(tokens[k]!)) {
+    const t = tokens[k]!;
+    const eq = t.indexOf("=");
+    env[t.slice(0, eq)] = t.slice(eq + 1);
+    k++;
+  }
+  const argv = tokens.slice(k);
+  if (argv.length === 0) return null;
+  return { argv, env, raw: tokens.join(" "), uncertain, pipedTo: [] };
+}
+
 /** Parse a (possibly compound) command line into invocations, including substitutions. */
 export function parseCommand(raw: string): Invocation[] {
   const { segments, subs, unbalanced } = scan(raw);
-  const invocations: Invocation[] = [];
+  const perSegment = segments.map((s) => buildInvocation(s.tokens, unbalanced));
 
-  for (const tokens of segments) {
-    const env: Record<string, string> = {};
-    let k = 0;
-    while (k < tokens.length && ENV_ASSIGN.test(tokens[k]!)) {
-      const t = tokens[k]!;
-      const eq = t.indexOf("=");
-      env[t.slice(0, eq)] = t.slice(eq + 1);
-      k++;
+  // Link pipelines: a run of segments joined by single `|` share a pipeline;
+  // each member's pipedTo = command words of the later stages in that pipeline.
+  let start = 0;
+  while (start < segments.length) {
+    let end = start;
+    while (segments[end]!.pipeNext && end + 1 < segments.length) end++;
+    for (let a = start; a <= end; a++) {
+      const inv = perSegment[a];
+      if (!inv) continue;
+      const later: string[] = [];
+      for (let b = a + 1; b <= end; b++) {
+        const cmd = perSegment[b]?.argv[0];
+        if (cmd) later.push(cmd);
+      }
+      inv.pipedTo = later;
     }
-    const argv = tokens.slice(k);
-    if (argv.length === 0) continue;
-    invocations.push({ argv, env, raw: tokens.join(" "), uncertain: unbalanced });
+    start = end + 1;
   }
 
+  const invocations: Invocation[] = perSegment.filter((i): i is Invocation => i !== null);
   for (const inner of subs) {
     if (inner.trim()) invocations.push(...parseCommand(inner));
   }
-
   return invocations;
 }

@@ -11,6 +11,8 @@ export interface Invocation {
   raw: string;
   /** true when the parser could not fully tokenize this segment. */
   uncertain: boolean;
+  /** command words of later stages this invocation's stdout pipes into (e.g. `curl x | sh` → ["sh"]). */
+  pipedTo?: string[];
 }
 
 /** The JSON a Claude Code PreToolUse hook receives on stdin (subset we use). */
@@ -28,8 +30,10 @@ export interface Context {
   branch(): string | null;
   /** files changed on this branch relative to `base` (base...HEAD), repo-relative. Memoized per base. */
   filesChangedVsBase(base: string): string[];
-  /** absolute repo root, or null. Memoized. */
+  /** absolute repo root of the config's location, or null. Memoized. */
   repoRoot(): string | null;
+  /** git repo root of an arbitrary directory (for scoping cross-repo commands). Memoized per dir. */
+  repoRootFor(dir: string): string | null;
   /** read a repo-relative file, or null when missing/unreadable. */
   readRepoFile(relPath: string): string | null;
 }
@@ -48,6 +52,8 @@ export interface Rule {
   id: string;
   description: string;
   appliesTo: { command: string; subcommand?: string | string[] };
+  /** when true, the rule only fires for commands targeting the config's own repo. */
+  scoped?: boolean;
   evaluate(inv: Invocation, ctx: Context): Violation | null;
 }
 
@@ -55,6 +61,8 @@ export interface Rule {
 export interface GitConfig {
   protectedBranches?: string[];
   defaultBase?: string;
+  /** when true (default), git rules fire only for commands targeting this repo. */
+  scopeToRepo?: boolean;
   branch?: {
     allowedPrefixes?: string[];
     reservedPrefixes?: string[];
@@ -70,9 +78,47 @@ export interface GitConfig {
   };
 }
 
+/**
+ * A predicate over one invocation + repo context. The rule fires (a violation)
+ * when the condition evaluates true. Authored in JSON — no code required.
+ */
+export type Condition =
+  | { always: true }
+  | { hasFlag: string[] } // any listed flag present (`--x` or `--x=…`)
+  | { hasShortChar: string[] } // any short-flag cluster contains a char (`-n`, `-vn`)
+  | { flagEquals: { flag: string; value: string } } // flag present and equals value
+  | { flagNotEquals: { flag: string; value: string } } // flag missing OR not equal (use for "require")
+  | { requireFlag: string } // fires when the flag is ABSENT
+  | { argMatches: string } // regex matches any arg (incl. command word)
+  | { argNotMatches: string } // no arg matches the regex
+  | { commandMatches: string } // regex matches the command word
+  | { onBranch: string } // current branch matches regex
+  | { notOnBranch: string } // current branch does not match regex (or no branch)
+  | { changedPathMatches: { pattern: string; base?: string } } // a file changed vs base matches glob
+  | { pipedInto: string[] } // this command pipes into one of these commands
+  | { all: Condition[] }
+  | { any: Condition[] }
+  | { not: Condition };
+
+/**
+ * A declarative rule authored entirely in config (JSON or JS). Compiled into a
+ * `Rule` at load time. Fires a violation when `command`/`subcommand` match and
+ * `when` is true.
+ */
+export interface RuleSpec {
+  id: string;
+  description?: string;
+  command: string; // exact command word, or "*" to match any command
+  subcommand?: string | string[];
+  when: Condition;
+  message: string;
+  fix?: string;
+}
+
 /** Top-level precmd configuration. */
 export interface Config {
   packs?: string[];
   git?: GitConfig;
-  rules?: Rule[];
+  /** Custom rules — declarative specs (JSON) and/or precompiled Rule objects (JS config). */
+  rules?: (RuleSpec | Rule)[];
 }

@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildGitConventionsPack } from "./rules/git-conventions";
+import { buildSafetyPack } from "./rules/safety";
+import { compileRules } from "./rules/spec";
 import type { Config, Rule } from "./types";
 
 export const DEFAULT_CONFIG: Config = { packs: [], git: {}, rules: [] };
@@ -39,12 +41,18 @@ export async function loadConfig(startDir: string): Promise<Config> {
   }
 }
 
-/** Expand configured packs + custom rules into a flat rule list. */
+/** Expand configured packs + custom rules into a flat rule list. Invalid specs are skipped. */
 export function resolveRules(config: Config): Rule[] {
   const rules: Rule[] = [];
   for (const pack of config.packs ?? []) {
     if (pack === "git-conventions") rules.push(...buildGitConventionsPack(config.git ?? {}));
+    else if (pack === "safety") rules.push(...buildSafetyPack());
   }
-  if (config.rules) rules.push(...config.rules);
+  if (config.rules) rules.push(...compileRules(config.rules).rules);
   return rules;
+}
+
+/** Return human-readable errors for any invalid custom rule specs (for `check`/debugging). */
+export function validateConfig(config: Config): string[] {
+  return config.rules ? compileRules(config.rules).errors : [];
 }

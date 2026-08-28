@@ -15,6 +15,12 @@ test("static context returns injected facts", () => {
   expect(ctx.readRepoFile("missing")).toBeNull();
 });
 
+test("repoRootFor maps directories, falls back to repoRoot (static)", () => {
+  const ctx = createStaticContext({ repoRoot: "/a", repoRoots: { "/b": "/b" } });
+  expect(ctx.repoRootFor("/b")).toBe("/b");
+  expect(ctx.repoRootFor("/unknown")).toBe("/a");
+});
+
 test("git context reads the real repo without throwing", () => {
   const ctx = createGitContext(process.cwd());
   const root = ctx.repoRoot();
