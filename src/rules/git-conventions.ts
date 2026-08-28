@@ -3,7 +3,7 @@
 import { flagValue, hasFlag, positionals } from "../argv";
 import { gitArgv } from "../engine";
 import { globMatch } from "../glob";
-import type { Context, GitConfig, Invocation, Rule } from "../types";
+import type { Context, GitConfig, Invocation, Rule, Violation } from "../types";
 import { denyFlag } from "./declarative";
 
 const DEFAULT_ALLOWED_PREFIXES = [
@@ -115,6 +115,7 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
   if (git.pr?.pathSectionRules?.length) {
     const base = git.pr.requireBase ?? git.defaultBase ?? git.protectedBranches?.[0] ?? "main";
     rules.push(prPathSectionRule(git.pr.pathSectionRules, base));
+    rules.push(prEditPathSectionRule(git.pr.pathSectionRules, base));
   }
 
   // Scope git rules to this repo by default so cross-repo commands aren't false-blocked.
@@ -292,9 +293,11 @@ function pushTargetsProtected(inv: Invocation, ctx: Context, protectedBranches: 
   const argv = gitArgv(inv);
   if (hasFlag(argv, ["--all", "--mirror"])) return true; // bulk push includes protected refs
   const after = positionals(argv).slice(1); // drop "push"; may be [remote, refspec...]
-  const targets = after.map((p) => stripRef(p.includes(":") ? p.slice(p.indexOf(":") + 1) : p));
-  const explicitHit = targets.some((t) => protectedBranches.includes(t));
   const current = ctx.branch();
+  const targets = after
+    .map((p) => stripRef(p.includes(":") ? p.slice(p.indexOf(":") + 1) : p))
+    .map((t) => (t === "HEAD" || t === "@") && current !== null ? current : t); // HEAD/@ resolve to current
+  const explicitHit = targets.some((t) => protectedBranches.includes(t));
   const implicitHit = after.length <= 1 && current !== null && protectedBranches.includes(current);
   return explicitHit || implicitHit;
 }
@@ -333,18 +336,23 @@ function pushDirectRule(protectedBranches: string[]): Rule {
   };
 }
 
+// Subcommands that create commits on the current branch.
+const COMMIT_CREATING = new Set(["commit", "merge", "cherry-pick", "revert", "am", "rebase"]);
+
 function commitOnProtectedRule(protectedBranches: string[]): Rule {
   return {
     id: "commit-on-protected",
-    description: "never commit directly on a protected branch — branch first",
-    appliesTo: { command: "git", subcommand: "commit" },
+    description: "never create commits directly on a protected branch — branch first",
+    appliesTo: { command: "git" },
     evaluate(inv, ctx) {
+      const sub = gitArgv(inv)[1];
+      if (sub === undefined || !COMMIT_CREATING.has(sub)) return null;
       const current = ctx.branch();
       if (current === null || !protectedBranches.includes(current)) return null;
       return {
         ruleId: "commit-on-protected",
-        message: `You are on protected branch "${current}" — never commit here; create a feature branch first.`,
-        fix: "git checkout -b <type>/<slug>, then commit on that branch",
+        message: `You are on protected branch "${current}" — never create commits here (git ${sub}); create a feature branch first.`,
+        fix: "git checkout -b <type>/<slug>, then work on that branch",
       };
     },
   };
@@ -404,30 +412,47 @@ function prTemplateRule(entries: { branchPrefix: string; template: string; requi
   };
 }
 
-function prPathSectionRule(
-  entries: { changedGlobs: string[]; requireSection: string }[],
+type PathSectionEntry = { changedGlobs: string[]; requireSection: string };
+
+function evaluatePathSections(
+  inv: Invocation,
+  ctx: Context,
+  entries: PathSectionEntry[],
   base: string,
-): Rule {
+  ruleId: string,
+): Violation | null {
+  if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify the section
+  const changed = ctx.filesChangedVsBase(base);
+  if (changed.length === 0) return null;
+  const body = prBody(inv, ctx);
+  for (const e of entries) {
+    const hit = changed.some((f) => e.changedGlobs.some((g) => globMatch(g, f)));
+    if (hit && !body.includes(e.requireSection)) {
+      return {
+        ruleId,
+        message: `Changed files match ${e.changedGlobs.join(", ")} — PR body must contain "${e.requireSection}".`,
+        fix: `add the "${e.requireSection}" section to the PR body`,
+      };
+    }
+  }
+  return null;
+}
+
+function prPathSectionRule(entries: PathSectionEntry[], base: string): Rule {
   return {
     id: "pr-path-section",
     description: "changed paths require a corresponding PR body section",
     appliesTo: { command: "gh", subcommand: ["pr", "create"] },
-    evaluate(inv, ctx) {
-      if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify the section
-      const changed = ctx.filesChangedVsBase(base);
-      if (changed.length === 0) return null;
-      const body = prBody(inv, ctx);
-      for (const e of entries) {
-        const hit = changed.some((f) => e.changedGlobs.some((g) => globMatch(g, f)));
-        if (hit && !body.includes(e.requireSection)) {
-          return {
-            ruleId: "pr-path-section",
-            message: `Changed files match ${e.changedGlobs.join(", ")} — PR body must contain "${e.requireSection}".`,
-            fix: `add the "${e.requireSection}" section to the PR body`,
-          };
-        }
-      }
-      return null;
-    },
+    evaluate: (inv, ctx) => evaluatePathSections(inv, ctx, entries, base, "pr-path-section"),
+  };
+}
+
+function prEditPathSectionRule(entries: PathSectionEntry[], base: string): Rule {
+  return {
+    id: "pr-edit-path-section",
+    description: "a gh pr edit that sets a body must keep the required path section",
+    appliesTo: { command: "gh", subcommand: ["pr", "edit"] },
+    evaluate: (inv, ctx) =>
+      prSetsBody(inv) ? evaluatePathSections(inv, ctx, entries, base, "pr-edit-path-section") : null,
   };
 }

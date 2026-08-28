@@ -38,6 +38,7 @@ test("pack builds all expected rule ids", () => {
       "pr-marker",
       "pr-edit-marker",
       "pr-path-section",
+      "pr-edit-path-section",
       "push-direct-protected",
       "push-force-protected",
       "push-no-verify",
@@ -159,6 +160,25 @@ test("piped body via --body-file - (stdin) is not false-blocked", () => {
     ids("gh pr create --base staging --body-file -", { changedFiles: ["src/checkout/pay.ts"] }),
   ).not.toContain("pr-path-section");
   expect(ids("gh pr edit --body-file -")).not.toContain("pr-edit-marker");
+});
+
+test("push origin HEAD/@ on a protected branch is blocked (review finding 2)", () => {
+  expect(ids("git push origin HEAD", { branch: "staging" })).toContain("push-direct-protected");
+  expect(ids("git push origin @", { branch: "main" })).toContain("push-direct-protected");
+  expect(ids("git push origin HEAD", { branch: "feat/x" })).not.toContain("push-direct-protected");
+});
+
+test("commit-on-protected covers merge/cherry-pick/revert/rebase (review finding 3)", () => {
+  expect(ids("git merge feat/x", { branch: "staging" })).toContain("commit-on-protected");
+  expect(ids("git cherry-pick abc123", { branch: "main" })).toContain("commit-on-protected");
+  expect(ids("git rebase feat/x", { branch: "staging" })).toContain("commit-on-protected");
+  expect(ids("git merge feat/x", { branch: "feat/y" })).not.toContain("commit-on-protected");
+});
+
+test("payment section is enforced on gh pr edit too (review finding 4)", () => {
+  const ctx = { changedFiles: ["src/checkout/pay.ts"] };
+  expect(ids('gh pr edit --body "no section here"', ctx)).toContain("pr-edit-path-section");
+  expect(ids("gh pr edit --add-label x", ctx)).not.toContain("pr-edit-path-section");
 });
 
 test("git rules are repo-scoped: a cross-repo push is not blocked", () => {
