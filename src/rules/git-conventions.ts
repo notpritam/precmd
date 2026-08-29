@@ -81,6 +81,11 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
     );
   }
 
+  if (git.commit?.denyNoVerify || git.push?.denyNoVerify) {
+    rules.push(hooksPathRule());
+    rules.push(hookSkipEnvRule());
+  }
+
   if (git.branch) {
     rules.push(
       branchNameRule(
@@ -97,6 +102,7 @@ export function buildGitConventionsPack(git: GitConfig): Rule[] {
 
   if (git.push?.denyDirectToProtected) {
     rules.push(pushDirectRule(git.protectedBranches ?? ["main"]));
+    rules.push(prMergeAdminRule());
   }
 
   if (git.pr?.requireBase) {
@@ -164,6 +170,11 @@ function prBodyFromStdin(inv: Invocation): boolean {
   return file === "-" && inline === null;
 }
 
+/** True when the PR body cannot be inspected — stdin, browser (--web), or generated (--fill). */
+function prBodyUnverifiable(inv: Invocation): boolean {
+  return prBodyFromStdin(inv) || hasFlag(inv.argv, ["--web", "--fill", "--fill-first", "--fill-verbose"]);
+}
+
 function prBaseRule(requireBase: string): Rule {
   return {
     id: "pr-base",
@@ -206,7 +217,7 @@ function prEditMarkerRule(markers: string[]): Rule {
     appliesTo: { command: "gh", subcommand: ["pr", "edit"] },
     evaluate(inv, ctx) {
       if (!prSetsBody(inv)) return null;
-      if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify
+      if (prBodyUnverifiable(inv)) return null; // stdin/--web/--fill body — cannot verify
       const body = prBody(inv, ctx);
       const missing = markers.filter((m) => !body.includes(m));
       if (missing.length === 0) return null;
@@ -241,6 +252,10 @@ function newBranchName(inv: Invocation): string | null {
       return null;
     }
     return positionals(argv)[1] ?? null; // positionals = ["branch", <name>, ...]
+  }
+  if (sub === "worktree") {
+    if (positionals(argv)[1] !== "add") return null; // only `git worktree add -b <name>` creates a branch
+    return flagValue(argv, "-b") ?? flagValue(argv, "-B");
   }
   return null;
 }
@@ -285,7 +300,15 @@ function branchNameRule(allowed: string[], reserved: string[], strictKebab: bool
 }
 
 function stripRef(t: string): string {
-  return t.replace(/^refs\/heads\//, "");
+  return t.replace(/^\+/, "").replace(/^refs\/heads\//, "");
+}
+
+/** A push is a force update if a force flag is present or any refspec is `+`-prefixed. */
+function pushIsForce(argv: string[]): boolean {
+  if (hasFlag(argv, FORCE_FLAGS)) return true;
+  return positionals(argv)
+    .slice(1)
+    .some((p) => p.startsWith("+"));
 }
 
 /** True when a `git push` targets a protected branch (explicit refspec, bulk mode, or implicit current branch). */
@@ -308,7 +331,7 @@ function pushForceRule(protectedBranches: string[]): Rule {
     description: "no force-push to protected branches",
     appliesTo: { command: "git", subcommand: "push" },
     evaluate(inv, ctx) {
-      if (!hasFlag(inv.argv, FORCE_FLAGS)) return null;
+      if (!pushIsForce(gitArgv(inv))) return null;
       if (!pushTargetsProtected(inv, ctx, protectedBranches)) return null;
       return {
         ruleId: "push-force-protected",
@@ -325,7 +348,7 @@ function pushDirectRule(protectedBranches: string[]): Rule {
     description: "protected-branch changes must land via PR, not a direct push",
     appliesTo: { command: "git", subcommand: "push" },
     evaluate(inv, ctx) {
-      if (hasFlag(inv.argv, FORCE_FLAGS)) return null; // force is handled by push-force-protected
+      if (pushIsForce(gitArgv(inv))) return null; // force is handled by push-force-protected
       if (!pushTargetsProtected(inv, ctx, protectedBranches)) return null;
       return {
         ruleId: "push-direct-protected",
@@ -347,6 +370,8 @@ function commitOnProtectedRule(protectedBranches: string[]): Rule {
     evaluate(inv, ctx) {
       const sub = gitArgv(inv)[1];
       if (sub === undefined || !COMMIT_CREATING.has(sub)) return null;
+      // recovery / no-op modes don't create a commit
+      if (hasFlag(inv.argv, ["--abort", "--quit", "--skip", "--dry-run", "--no-commit"])) return null;
       const current = ctx.branch();
       if (current === null || !protectedBranches.includes(current)) return null;
       return {
@@ -364,7 +389,7 @@ function prMarkerRule(markers: string[]): Rule {
     description: "PR body must contain required marker section(s)",
     appliesTo: { command: "gh", subcommand: ["pr", "create"] },
     evaluate(inv, ctx) {
-      if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify, don't false-block
+      if (prBodyUnverifiable(inv)) return null; // stdin/--web/--fill body — cannot verify, don't false-block
       const body = prBody(inv, ctx);
       const missing = markers.filter((m) => !body.includes(m));
       if (missing.length === 0) return null;
@@ -386,6 +411,7 @@ function prTemplateRule(entries: { branchPrefix: string; template: string; requi
     evaluate(inv, ctx) {
       const branch = prHeadBranch(inv, ctx);
       if (!branch) return null;
+      if (hasFlag(inv.argv, ["--web", "--fill", "--fill-first", "--fill-verbose"])) return null; // browser/generated body
       for (const e of entries) {
         if (!branch.startsWith(e.branchPrefix + "/")) continue;
         const file = flagValue(inv.argv, "--body-file") ?? flagValue(inv.argv, "-F");
@@ -396,7 +422,7 @@ function prTemplateRule(entries: { branchPrefix: string; template: string; requi
             fix: `copy ${e.template} to a temp file, fill it in, then pass --body-file <that file>`,
           };
         }
-        if (e.requireMarker && !prBodyFromStdin(inv)) {
+        if (e.requireMarker && !prBodyUnverifiable(inv)) {
           const body = prBody(inv, ctx);
           if (!body.includes(e.requireMarker)) {
             return {
@@ -421,7 +447,7 @@ function evaluatePathSections(
   base: string,
   ruleId: string,
 ): Violation | null {
-  if (prBodyFromStdin(inv)) return null; // body piped via stdin — cannot verify the section
+  if (prBodyUnverifiable(inv)) return null; // stdin/--web/--fill body — cannot verify the section
   const changed = ctx.filesChangedVsBase(base);
   if (changed.length === 0) return null;
   const body = prBody(inv, ctx);
@@ -454,5 +480,71 @@ function prEditPathSectionRule(entries: PathSectionEntry[], base: string): Rule 
     appliesTo: { command: "gh", subcommand: ["pr", "edit"] },
     evaluate: (inv, ctx) =>
       prSetsBody(inv) ? evaluatePathSections(inv, ctx, entries, base, "pr-edit-path-section") : null,
+  };
+}
+
+// git subcommands where a skipped hook matters.
+const HOOK_RELEVANT = new Set(["commit", "merge", "pull", "rebase", "cherry-pick", "revert", "am", "push"]);
+
+function hooksPathRule(): Rule {
+  return {
+    id: "git-hookspath",
+    description: "git must not redirect core.hooksPath to skip hooks",
+    appliesTo: { command: "git" },
+    evaluate(inv) {
+      const hit = inv.argv.some(
+        (t) => /^core\.hooksPath=/i.test(t) || /^--config-env=core\.hooksPath/i.test(t),
+      );
+      if (!hit) return null;
+      return {
+        ruleId: "git-hookspath",
+        message: "Overriding core.hooksPath (e.g. git -c core.hooksPath=…) disables git hooks — banned.",
+        fix: "remove the core.hooksPath override",
+      };
+    },
+  };
+}
+
+function hookSkipEnvRule(): Rule {
+  return {
+    id: "hook-skip-env",
+    description: "commit/push must not run with hook-skipping environment variables",
+    appliesTo: { command: "git" },
+    evaluate(inv) {
+      const sub = gitArgv(inv)[1];
+      if (sub === undefined || !HOOK_RELEVANT.has(sub)) return null;
+      const env = inv.env;
+      const bad: string[] = [];
+      if (env.HUSKY === "0") bad.push("HUSKY=0");
+      if (env.HUSKY_SKIP_HOOKS && env.HUSKY_SKIP_HOOKS !== "0") bad.push("HUSKY_SKIP_HOOKS");
+      if (env.PRE_COMMIT_ALLOW_NO_CONFIG === "1") bad.push("PRE_COMMIT_ALLOW_NO_CONFIG");
+      for (const [k, v] of Object.entries(env)) {
+        if (/^GIT_CONFIG_KEY_\d+$/.test(k) && /^core\.hooksPath$/i.test(v)) {
+          bad.push("core.hooksPath via GIT_CONFIG");
+        }
+      }
+      if (bad.length === 0) return null;
+      return {
+        ruleId: "hook-skip-env",
+        message: `Hook-skipping env var(s) present (${bad.join(", ")}) on git ${sub} — banned.`,
+        fix: "remove the hook-skip environment variables",
+      };
+    },
+  };
+}
+
+function prMergeAdminRule(): Rule {
+  return {
+    id: "pr-merge-admin",
+    description: "gh pr merge --admin bypasses branch protection",
+    appliesTo: { command: "gh", subcommand: ["pr", "merge"] },
+    evaluate(inv) {
+      if (!hasFlag(inv.argv, ["--admin"])) return null;
+      return {
+        ruleId: "pr-merge-admin",
+        message: "gh pr merge --admin bypasses branch protection and required reviews — banned.",
+        fix: "merge without --admin (satisfy required checks/reviews first)",
+      };
+    },
   };
 }

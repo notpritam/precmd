@@ -12,8 +12,27 @@ function assertStringArray(v: unknown, key: string): asserts v is string[] {
   }
 }
 
+function assertString(v: unknown, key: string): asserts v is string {
+  if (typeof v !== "string") throw new Error(`${key} must be a string`);
+}
+
+const MAX_REGEX_INPUT = 4000;
+
+/** Test with a bounded input length so a slow config regex can't be driven to hang. */
+function safeTest(re: RegExp, s: string): boolean {
+  return re.test(s.length > MAX_REGEX_INPUT ? s.slice(0, MAX_REGEX_INPUT) : s);
+}
+
+/** Heuristic: a quantified group that itself contains an unbounded quantifier (classic ReDoS). */
+function looksCatastrophic(src: string): boolean {
+  return /\((?:[^()\\]|\\.)*[*+](?:[^()\\]|\\.)*\)[*+]/.test(src);
+}
+
 function compileRegex(src: unknown, key: string): RegExp {
   if (typeof src !== "string") throw new Error(`${key} must be a string regex`);
+  if (looksCatastrophic(src)) {
+    throw new Error(`${key} may be vulnerable to catastrophic backtracking (nested quantifier)`);
+  }
   try {
     return new RegExp(src);
   } catch (e) {
@@ -38,40 +57,45 @@ export function compileCondition(cond: Condition): Pred {
   }
   if ("flagEquals" in cond) {
     const { flag, value } = cond.flagEquals;
+    assertString(flag, "flagEquals.flag");
+    assertString(value, "flagEquals.value");
     return (inv) => flagValue(inv.argv, flag) === value;
   }
   if ("flagNotEquals" in cond) {
     const { flag, value } = cond.flagNotEquals;
+    assertString(flag, "flagNotEquals.flag");
+    assertString(value, "flagNotEquals.value");
     return (inv) => flagValue(inv.argv, flag) !== value;
   }
   if ("requireFlag" in cond) {
     const flag = cond.requireFlag;
+    assertString(flag, "requireFlag");
     return (inv) => !hasFlag(inv.argv, [flag]);
   }
   if ("argMatches" in cond) {
     const re = compileRegex(cond.argMatches, "argMatches");
-    return (inv) => inv.argv.some((a) => re.test(a));
+    return (inv) => inv.argv.some((a) => safeTest(re, a));
   }
   if ("argNotMatches" in cond) {
     const re = compileRegex(cond.argNotMatches, "argNotMatches");
-    return (inv) => !inv.argv.some((a) => re.test(a));
+    return (inv) => !inv.argv.some((a) => safeTest(re, a));
   }
   if ("commandMatches" in cond) {
     const re = compileRegex(cond.commandMatches, "commandMatches");
-    return (inv) => re.test(inv.argv[0] ?? "");
+    return (inv) => safeTest(re, inv.argv[0] ?? "");
   }
   if ("onBranch" in cond) {
     const re = compileRegex(cond.onBranch, "onBranch");
     return (_inv, ctx) => {
       const b = ctx.branch();
-      return b !== null && re.test(b);
+      return b !== null && safeTest(re, b);
     };
   }
   if ("notOnBranch" in cond) {
     const re = compileRegex(cond.notOnBranch, "notOnBranch");
     return (_inv, ctx) => {
       const b = ctx.branch();
-      return b === null || !re.test(b);
+      return b === null || !safeTest(re, b);
     };
   }
   if ("changedPathMatches" in cond) {

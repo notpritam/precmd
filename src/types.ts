@@ -13,6 +13,8 @@ export interface Invocation {
   uncertain: boolean;
   /** command words of later stages this invocation's stdout pipes into (e.g. `curl x | sh` → ["sh"]). */
   pipedTo?: string[];
+  /** subshell nesting depth (0 = top level); a `cd` inside `( … )` does not persist to shallower depths. */
+  depth?: number;
 }
 
 /** The JSON a Claude Code PreToolUse hook receives on stdin (subset we use). */

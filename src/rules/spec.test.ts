@@ -71,3 +71,21 @@ test("malformed specs are skipped with errors, valid ones kept", () => {
   expect(rules.map((r) => r.id)).toEqual(["ok"]);
   expect(errors.length).toBe(2);
 });
+
+test("runtime-throwing operand shapes are rejected at compile, not at eval (finding R1)", () => {
+  const { rules, errors } = compileRules([
+    { id: "bad", command: "*", when: { requireFlag: ["--foo"] }, message: "x" } as unknown as RuleSpec,
+    { id: "bad2", command: "x", when: { flagEquals: { flag: 1, value: "y" } }, message: "x" } as unknown as RuleSpec,
+    { id: "ok", command: "git", when: { hasFlag: ["-n"] }, message: "y" },
+  ]);
+  expect(rules.map((r) => r.id)).toEqual(["ok"]);
+  expect(errors.length).toBe(2);
+});
+
+test("catastrophic-backtracking regexes are rejected (finding R2)", () => {
+  const { rules, errors } = compileRules([
+    { id: "redos", command: "z", when: { argMatches: "(a+)+$" }, message: "x" },
+  ]);
+  expect(rules.length).toBe(0);
+  expect(errors[0]).toMatch(/backtracking|catastrophic/i);
+});

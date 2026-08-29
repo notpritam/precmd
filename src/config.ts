@@ -36,7 +36,11 @@ export async function loadConfig(startDir: string): Promise<Config> {
     }
     const mod = (await import(pathToFileURL(p).href)) as { default?: Config } & Config;
     return { ...DEFAULT_CONFIG, ...(mod.default ?? mod) };
-  } catch {
+  } catch (e) {
+    // Fail open (a broken config must not brick the agent) — but not silently.
+    process.stderr.write(
+      `precmd: failed to load ${p} — enforcement is DISABLED until fixed: ${(e as Error).message}\n`,
+    );
     return DEFAULT_CONFIG;
   }
 }

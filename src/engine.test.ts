@@ -75,3 +75,17 @@ test("scoped rules skip commands targeting another repo (via cd or -C)", () => {
   expect(evaluate(parseCommand("git -C /repoB push origin main"), [scopedRule], ctx)).toEqual([]);
   expect(evaluate(parseCommand("cd /repoB && git push origin main"), [scopedRule], ctx)).toEqual([]);
 });
+
+test("a throwing rule is skipped, other rules still fire (finding R1)", () => {
+  const boom: Rule = {
+    id: "boom",
+    description: "boom",
+    appliesTo: { command: "git" },
+    evaluate: () => {
+      throw new Error("kaboom");
+    },
+  };
+  const good = mk("ok", { command: "git", subcommand: "commit" });
+  const out = evaluate([inv(["git", "commit"])], [boom, good], {} as never);
+  expect(out.map((v) => v.ruleId)).toEqual(["ok"]);
+});

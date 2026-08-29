@@ -32,6 +32,8 @@ test("pack builds all expected rule ids", () => {
       "commit-on-protected",
       "merge-no-verify",
       "pull-no-verify",
+      "git-hookspath",
+      "hook-skip-env",
       "pr-base",
       "pr-edit-base",
       "pr-branch-template",
@@ -39,6 +41,7 @@ test("pack builds all expected rule ids", () => {
       "pr-edit-marker",
       "pr-path-section",
       "pr-edit-path-section",
+      "pr-merge-admin",
       "push-direct-protected",
       "push-force-protected",
       "push-no-verify",
@@ -194,4 +197,54 @@ test("git rules are repo-scoped: a cross-repo push is not blocked", () => {
   expect(evaluate(parseCommand("git push origin main"), rules, same).map((v) => v.ruleId)).toContain(
     "push-direct-protected",
   );
+});
+
+test("deep-review: wrapper arity, lone &, comments, -- (bypass + FP fixes)", () => {
+  expect(ids("sudo -u root git commit --no-verify")).toContain("commit-no-verify");
+  expect(ids("env -u FOO git commit -n")).toContain("commit-no-verify");
+  expect(ids("nice -n 5 git commit -n")).toContain("commit-no-verify");
+  expect(ids("timeout 5 git commit -n")).toContain("commit-no-verify");
+  expect(ids("echo x & git commit --no-verify")).toContain("commit-no-verify");
+  expect(ids('git commit -m "msg" # a note about -n here')).not.toContain("commit-no-verify");
+  expect(ids("git commit -- -n")).not.toContain("commit-no-verify");
+});
+
+test("deep-review: +refspec force, hooksPath, hook-skip env, worktree, pr merge --admin", () => {
+  expect(ids("git push origin +main", { branch: "feat/x" })).toContain("push-force-protected");
+  expect(ids("git -c core.hooksPath=/dev/null commit -m x", { branch: "feat/x" })).toContain("git-hookspath");
+  expect(ids("HUSKY=0 git commit -m x", { branch: "feat/x" })).toContain("hook-skip-env");
+  expect(ids("git worktree add -b nope/x ../wt")).toContain("branch-name");
+  expect(ids("gh pr merge 123 --admin --squash")).toContain("pr-merge-admin");
+});
+
+test("deep-review: false-positive fixes (abort/dry-run on protected, --web)", () => {
+  expect(ids("git merge --abort", { branch: "staging" })).not.toContain("commit-on-protected");
+  expect(ids("git commit --dry-run", { branch: "staging" })).not.toContain("commit-on-protected");
+  expect(ids("gh pr create --web --base staging", { branch: "feat/x" })).not.toContain("pr-marker");
+});
+
+test("deep-review: gh -R cross-repo is not held to this repo's policy (finding 7)", () => {
+  const own = createStaticContext({ cwd: "/e1", repoRoot: "/e1" });
+  expect(
+    evaluate(parseCommand("gh pr create -R other/repo --base main --body x"), rules, own).map((v) => v.ruleId),
+  ).not.toContain("pr-base");
+  expect(
+    evaluate(parseCommand("gh pr create --base main --body x"), rules, own).map((v) => v.ruleId),
+  ).toContain("pr-base");
+});
+
+test("deep-review: subshell cd does not leak scoping (finding P3)", () => {
+  const ctx = createStaticContext({
+    cwd: "/e1",
+    repoRoot: "/e1",
+    repoRoots: { "/e1": "/e1", "/other": "/other" },
+  });
+  // cd inside ( ) is popped; the later commit is still scoped to /e1 → blocked
+  expect(
+    evaluate(parseCommand("( cd /other && true ) && git commit --no-verify"), rules, ctx).map((v) => v.ruleId),
+  ).toContain("commit-no-verify");
+  // a commit genuinely inside the other repo's subshell is allowed
+  expect(
+    evaluate(parseCommand("( cd /other && git commit --no-verify )"), rules, ctx).map((v) => v.ruleId),
+  ).not.toContain("commit-no-verify");
 });
