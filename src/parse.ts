@@ -232,14 +232,22 @@ function unwrap(inv: Invocation, depth: number): Invocation[] {
   if (WRAPPERS.has(head) && argv.length > 1) {
     const out: Invocation[] = [inv];
     const seen = new Set<string>();
+    const extraEnv: Record<string, string> = {}; // env set via the wrapper (e.g. `env HUSKY=0 git …`)
     for (let j = 1; j < argv.length; j++) {
       const t = argv[j]!;
-      if (t.startsWith("-") || ENV_ASSIGN.test(t)) continue;
+      if (t.startsWith("-")) continue;
+      if (ENV_ASSIGN.test(t)) {
+        const eq = t.indexOf("=");
+        extraEnv[t.slice(0, eq)] = t.slice(eq + 1);
+        continue;
+      }
       const tail = argv.slice(j);
       const key = tail.join(" ");
       if (seen.has(key)) continue;
       seen.add(key);
-      for (const u of unwrap(make(tail, inv), depth + 1)) out.push(u);
+      const child = make(tail, inv);
+      child.env = { ...child.env, ...extraEnv };
+      for (const u of unwrap(child, depth + 1)) out.push(u);
     }
     return out;
   }

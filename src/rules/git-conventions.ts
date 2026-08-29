@@ -172,7 +172,11 @@ function prBodyFromStdin(inv: Invocation): boolean {
 
 /** True when the PR body cannot be inspected — stdin, browser (--web), or generated (--fill). */
 function prBodyUnverifiable(inv: Invocation): boolean {
-  return prBodyFromStdin(inv) || hasFlag(inv.argv, ["--web", "--fill", "--fill-first", "--fill-verbose"]);
+  if (prBodyFromStdin(inv)) return true;
+  if (hasFlag(inv.argv, ["--web"])) return true;
+  // --fill generates the body only when no explicit --body/--body-file overrides it.
+  if (hasFlag(inv.argv, ["--fill", "--fill-first", "--fill-verbose"])) return !prSetsBody(inv);
+  return false;
 }
 
 function prBaseRule(requireBase: string): Rule {

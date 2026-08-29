@@ -213,8 +213,15 @@ test("deep-review: +refspec force, hooksPath, hook-skip env, worktree, pr merge 
   expect(ids("git push origin +main", { branch: "feat/x" })).toContain("push-force-protected");
   expect(ids("git -c core.hooksPath=/dev/null commit -m x", { branch: "feat/x" })).toContain("git-hookspath");
   expect(ids("HUSKY=0 git commit -m x", { branch: "feat/x" })).toContain("hook-skip-env");
+  expect(ids("env HUSKY=0 git commit -m x", { branch: "feat/x" })).toContain("hook-skip-env");
+  expect(ids("sudo HUSKY=0 git commit -m x", { branch: "feat/x" })).toContain("hook-skip-env");
   expect(ids("git worktree add -b nope/x ../wt")).toContain("branch-name");
   expect(ids("gh pr merge 123 --admin --squash")).toContain("pr-merge-admin");
+});
+
+test("deep-review: --fill with an explicit --body is still verifiable", () => {
+  expect(ids('gh pr create --fill --base staging --body "nope"', { branch: "feat/x" })).toContain("pr-marker");
+  expect(ids("gh pr create --fill --base staging", { branch: "feat/x" })).not.toContain("pr-marker");
 });
 
 test("deep-review: false-positive fixes (abort/dry-run on protected, --web)", () => {
